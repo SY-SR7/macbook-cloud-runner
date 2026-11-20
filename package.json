@@ -1,0 +1,15 @@
+{
+  "name": "kleinanzeigen-macbook-telegram-bot",
+  "version": "2.0.0",
+  "description": "Autonomous 24/7 Kleinanzeigen MacBook M-Series Hunter & Interactive Telegram Bot",
+  "main": "multi-bot-service.js",
+  "scripts": {
+    "start": "node multi-bot-service.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "tesseract.js": "^7.0.0"
+  }
+}
