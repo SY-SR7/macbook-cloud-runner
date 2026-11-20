@@ -92,14 +92,34 @@ function parseArticlesFromSearchHtml(html) {
     const adId = m[1];
     const articleHtml = m[0];
 
-    const titleMatch = articleHtml.match(/<a\b[^>]*class="[^"]*ellipsis[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i) ||
-      articleHtml.match(/<a\b[^>]*href="(\/s-anzeige\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-
-    let adUrl = "";
+    // Extract Title robustly (ld+json -> <h3><a> -> legacy <a>)
     let rawTitle = "";
-    if (titleMatch) {
-      adUrl = titleMatch[1].startsWith("http") ? titleMatch[1] : `https://www.kleinanzeigen.de${titleMatch[1]}`;
-      rawTitle = cleanText(titleMatch[2]);
+    const ldJsonMatch = articleHtml.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
+    if (ldJsonMatch) {
+      try {
+        const ld = JSON.parse(ldJsonMatch[1]);
+        if (ld.title) rawTitle = cleanText(ld.title);
+      } catch (e) {}
+    }
+
+    if (!rawTitle) {
+      const h3Match = articleHtml.match(/<h3\b[^>]*>[\s\S]*?<a\b[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h3>/i);
+      if (h3Match) rawTitle = cleanText(h3Match[1]);
+    }
+
+    if (!rawTitle) {
+      const titleMatch = articleHtml.match(/<a\b[^>]*class="[^"]*ellipsis[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+      if (titleMatch) rawTitle = cleanText(titleMatch[2]);
+    }
+
+    // Extract URL robustly (data-href -> /s-anzeige/)
+    let adUrl = "";
+    const dataHrefMatch = articleHtml.match(/data-href="([^"]+)"/i);
+    if (dataHrefMatch) {
+      adUrl = dataHrefMatch[1].startsWith("http") ? dataHrefMatch[1] : `https://www.kleinanzeigen.de${dataHrefMatch[1]}`;
+    } else {
+      const hrefMatch = articleHtml.match(/href="(\/s-anzeige\/[^"]+)"/i);
+      if (hrefMatch) adUrl = hrefMatch[1].startsWith("http") ? hrefMatch[1] : `https://www.kleinanzeigen.de${hrefMatch[1]}`;
     }
 
     // Robust multi-tier price parser for modern & legacy Kleinanzeigen HTML
