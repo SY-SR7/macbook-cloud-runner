@@ -1,0 +1,89 @@
+name: 24/7 Cloud MacBook Hunter
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: cloud-hunter
+  cancel-in-progress: true
+
+jobs:
+  cloud-hunt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --production
+
+      - name: Test Kleinanzeigen & Run Cloud Hunter Loop
+        run: |
+          node -e "
+            async function runCloud() {
+              const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7'
+              };
+
+              console.log('[Cloud Hunter] Verifying connection to Kleinanzeigen from GitHub Cloud...');
+              let canAccess = false;
+              try {
+                const res = await fetch('https://www.kleinanzeigen.de/s-notebooks-laptops/hannover/preis:250:1000/macbook/k0c278l3155r120', { headers });
+                console.log('HTTP Status from GitHub Cloud:', res.status);
+                const text = await res.text();
+                const hasAds = text.includes('data-adid');
+                console.log('HTML length:', text.length, 'Has ads:', hasAds);
+
+                // Ping owner on Telegram
+                const tgUrl = 'https://api.telegram.org/bot9026206004:AAFsg9wYkBkDExpyYoHU19wFmGEngKftyKM/sendMessage';
+                await fetch(tgUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: '385198338',
+                    text: '☁️ <b>[سيرفر GitHub Cloud السحابي نشط الآن]</b>\n\n' +
+                          'حالة الاتصال بموقع Kleinanzeigen: <b>' + res.status + '</b> ' + (res.status === 200 ? '✅' : '⚠️') + '\n' +
+                          'تم قراءة الإعلانات بنجاح: ' + (hasAds ? 'نعم (مؤهل) ✅' : 'حظر كابتشا ❌') + '\n\n' +
+                          '<i>يعمل الآن سحابياً من خوادم GitHub لمدة 20 دقيقة لكل دورة حتى لو كان لابتوبك مغلقاً!</i>',
+                    parse_mode: 'HTML'
+                  })
+                });
+
+                if (res.status === 200 && hasAds) {
+                  canAccess = true;
+                }
+              } catch(e) {
+                console.error('[Cloud Hunter] Test failed:', e.message);
+              }
+
+              if (canAccess) {
+                console.log('[Cloud Hunter] Cloud access verified! Spawning 20-minute autonomous multi-bot hunter...');
+                const { spawn } = require('child_process');
+                const child = spawn('node', ['multi-bot-service.js'], { stdio: 'inherit' });
+                
+                // Run for 18 minutes (until next cron trigger)
+                setTimeout(() => {
+                  console.log('[Cloud Hunter] 18-minute cloud shift complete. Exiting for next scheduled runner.');
+                  child.kill('SIGINT');
+                  process.exit(0);
+                }, 18 * 60 * 1000);
+              } else {
+                console.log('[Cloud Hunter] Direct cloud access blocked by Kleinanzeigen Cloudflare. Exiting.');
+                process.exit(0);
+              }
+            }
+
+            runCloud();
+          "
