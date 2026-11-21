@@ -374,53 +374,139 @@ class RulesEngine {
       missingSpecs.push("battery");
     }
 
-    // 9. Location & Distance Check (supports Hannover, Hamburg, Halle, etc.)
-    const locLower = locationStr.toLowerCase();
-    const targetCity = (options.targetCity || "hannover").toLowerCase();
-    const maxDistance = typeof options.maxDistanceKm === "number" ? options.maxDistanceKm : 120;
-    const strictCityOnly = Boolean(options.strictCityOnly || maxDistance === 0);
-
-    const kmMatch = locLower.match(/(\d+)\s*km/);
-    if (kmMatch) {
-      result.distanceKm = parseInt(kmMatch[1], 10);
-    } else {
-      result.distanceKm = 0;
+    // 9. Location & Distance Validation
+    const locValidation = RulesEngine.validateLocation(locationStr, options);
+    if (!locValidation.qualified) {
+      return {
+        ...result,
+        qualified: false,
+        rejectReason: locValidation.rejectReason
+      };
     }
 
-    if (targetCity === "hamburg" || targetCity === "22769") {
-      const isHamburg = locLower.includes("hamburg") || /\b2[0-2][0-9]{3}\b/.test(locLower) || locLower.includes("harburg") || locLower.includes("altona");
-      result.isInTargetCity = isHamburg && result.distanceKm === 0;
-      result.isInHannover = false;
-      if (strictCityOnly && (!isHamburg || result.distanceKm > 0)) {
-        return { ...result, qualified: false, rejectReason: `Location is outside Hamburg (${locationStr})` };
-      }
-      if (result.distanceKm > maxDistance) {
-        return { ...result, qualified: false, rejectReason: `Distance ${result.distanceKm} km exceeds max ${maxDistance} km from Hamburg (22769)` };
-      }
-    } else if (targetCity === "halle" || targetCity === "halle-saale" || targetCity.includes("halle")) {
-      const isHalle = locLower.includes("halle") || /\b061[0-9]{2}\b/.test(locLower);
-      result.isInTargetCity = isHalle && result.distanceKm === 0;
-      result.isInHannover = false;
-      if (result.distanceKm > maxDistance) {
-        return { ...result, qualified: false, rejectReason: `Distance ${result.distanceKm} km exceeds max ${maxDistance} km from Halle` };
-      }
-    } else {
-      // Default: Hannover (30167)
-      if (locLower.includes("hannover") || locLower.includes("30167") || /\b30[0-9]{3}\b/.test(locLower)) {
-        result.isInHannover = true;
-        result.distanceKm = 0;
-        result.isInTargetCity = true;
-      } else {
-        result.isInHannover = false;
-        result.isInTargetCity = false;
-        if (result.distanceKm > maxDistance) {
-          return { ...result, qualified: false, rejectReason: `Distance ${result.distanceKm} km exceeds max ${maxDistance} km` };
-        }
-      }
-    }
+    result.distanceKm = locValidation.distanceKm;
+    result.isInTargetCity = locValidation.isInTargetCity;
+    result.isInHannover = locValidation.isInTargetCity && (options.targetCity || "hannover").toLowerCase().includes("hannover");
 
     result.missingSpecs = missingSpecs;
     return { ...result, qualified: true };
+  }
+
+  /**
+   * Validate if the listing location is within the allowed geographical boundaries.
+   * Target: Hamburg (22769) and <= 20 km.
+   * Target: Halle Saale and <= 40 km.
+   * Target: Hannover and <= 120 km.
+   */
+  static validateLocation(locationStr, options = {}) {
+    const targetCity = (options.targetCity || "hannover").toLowerCase().trim();
+    const maxDistance = typeof options.maxDistanceKm === "number" ? options.maxDistanceKm : 120;
+    const locLower = (locationStr || "").toLowerCase().trim();
+
+    if (!locLower) {
+      return { qualified: false, distanceKm: null, isInTargetCity: false, rejectReason: "Missing location information" };
+    }
+
+    const kmMatch = locLower.match(/(\d+)\s*km/);
+    if (kmMatch) {
+      const dist = parseInt(kmMatch[1], 10);
+      if (dist > maxDistance) {
+        return { qualified: false, distanceKm: dist, isInTargetCity: false, rejectReason: `Distance ${dist} km exceeds max allowed ${maxDistance} km for ${targetCity}` };
+      }
+    }
+
+    if (targetCity === "hamburg" || targetCity === "22769") {
+      const distantCities = [
+        "hannover", "osnabrück", "osnabrueck", "bielefeld", "braunschweig", "arnsberg",
+        "mannheim", "berlin", "bremen", "kiel", "lübeck", "luebeck", "dortmund", "essen",
+        "köln", "koeln", "münchen", "muenchen", "frankfurt", "stuttgart", "leipzig", "dresden",
+        "erfurt", "magdeburg", "rostock", "cuxhaven", "bremerhaven", "flensburg", "neumünster"
+      ];
+      if (distantCities.some(city => locLower.includes(city))) {
+        return { qualified: false, distanceKm: 150, isInTargetCity: false, rejectReason: `Location is distant city outside Hamburg (${locationStr})` };
+      }
+
+      const hamburgSuburbs = [
+        "hamburg", "altona", "eimsbüttel", "eimsbuettel", "wandsbek", "harburg", "bergedorf",
+        "norderstedt", "wedel", "pinneberg", "halstenbek", "schenefeld", "rellingen",
+        "quickborn", "bönningstedt", "boenningstedt", "ellerbek", "hasloh", "appen",
+        "uetersen", "moorrege", "tornesch", "seevetal", "neu wulmstorf", "rosengarten",
+        "reinbek", "glinde", "oststeinbek", "barsbüttel", "barsbuettel", "wentorf", "tangstedt"
+      ];
+      const hasSuburbs = hamburgSuburbs.some(sub => locLower.includes(sub));
+
+      let isAllowedPlz = false;
+      const plzMatch = locLower.match(/\b(\d{5})\b/);
+      if (plzMatch) {
+        const plz = plzMatch[1];
+        const p2 = plz.slice(0, 2);
+        const p3 = plz.slice(0, 3);
+        if (p2 === "20" || p2 === "22") isAllowedPlz = true;
+        else if (p2 === "25" && plz.startsWith("254")) isAllowedPlz = true;
+        else if (p3 === "210" || p3 === "211" || plz.startsWith("2121") || plz === "21224" || plz === "21465" || plz === "21509" || plz === "21629") isAllowedPlz = true;
+      }
+
+      if (!hasSuburbs && !isAllowedPlz) {
+        return { qualified: false, distanceKm: 999, isInTargetCity: false, rejectReason: `Location is outside Hamburg 20km perimeter: ${locationStr}` };
+      }
+
+      const isExactHamburg = locLower.includes("hamburg") || /\b2[0-2][0-9]{3}\b/.test(locLower);
+      return { qualified: true, distanceKm: kmMatch ? parseInt(kmMatch[1], 10) : 0, isInTargetCity: isExactHamburg };
+    }
+
+    if (targetCity === "halle" || targetCity === "halle-saale" || targetCity.includes("halle")) {
+      const distantCities = [
+        "hannover", "hamburg", "berlin", "erfurt", "weimar", "jena", "stadtroda", "apolda",
+        "magdeburg", "dresden", "chemnitz", "gera", "potsdam", "braunschweig"
+      ];
+      if (distantCities.some(city => locLower.includes(city))) {
+        return { qualified: false, distanceKm: 80, isInTargetCity: false, rejectReason: `Location is outside Halle 40km perimeter (${locationStr})` };
+      }
+
+      const halleSuburbs = [
+        "halle", "saalekreis", "merseburg", "bad lauchstädt", "lauchstaedt", "schkopau",
+        "teutschenthal", "landsberg", "wettin", "löbejün", "loebejuen", "petersberg",
+        "kabelsketal", "braunsbedra", "querfurt", "leipzig", "schkeuditz", "delitzsch",
+        "bitterfeld", "wolfen", "eisleben"
+      ];
+      const hasSuburbs = halleSuburbs.some(sub => locLower.includes(sub));
+
+      let isAllowedPlz = false;
+      const plzMatch = locLower.match(/\b(\d{5})\b/);
+      if (plzMatch) {
+        const plz = plzMatch[1];
+        if (plz.startsWith("061") || plz.startsWith("062") || plz.startsWith("041") || plz.startsWith("042") || plz.startsWith("043") || plz.startsWith("044") || plz.startsWith("045") || plz.startsWith("0674") || plz.startsWith("0676")) {
+          isAllowedPlz = true;
+        }
+      }
+
+      if (!hasSuburbs && !isAllowedPlz) {
+        return { qualified: false, distanceKm: 999, isInTargetCity: false, rejectReason: `Location is outside Halle 40km perimeter: ${locationStr}` };
+      }
+
+      return { qualified: true, distanceKm: kmMatch ? parseInt(kmMatch[1], 10) : 0, isInTargetCity: locLower.includes("halle") || /\b061[0-9]{2}\b/.test(locLower) };
+    }
+
+    // Hannover default
+    const distantCities = ["hamburg", "berlin", "münchen", "muenchen", "frankfurt", "stuttgart", "köln", "koeln", "düsseldorf", "duesseldorf", "dortmund", "essen", "leipzig", "dresden"];
+    if (distantCities.some(city => locLower.includes(city))) {
+      return { qualified: false, distanceKm: 200, isInTargetCity: false, rejectReason: `Location is distant city outside Hannover 120km (${locationStr})` };
+    }
+
+    let isAllowedPlz = false;
+    const plzMatch = locLower.match(/\b(\d{5})\b/);
+    if (plzMatch) {
+      const p2 = plzMatch[1].slice(0, 2);
+      if (["30", "31", "32", "33", "38", "29", "27", "28", "37", "49"].includes(p2)) isAllowedPlz = true;
+    }
+    const hannoverKeywords = ["hannover", "braunschweig", "wolfsburg", "salzgitter", "hildesheim", "hameln", "celle", "peine", "bielefeld", "paderborn", "gütersloh", "herford", "minden", "osnabrück", "nienburg", "göttingen"];
+    const hasHannoverKw = hannoverKeywords.some(k => locLower.includes(k));
+
+    if (!hasHannoverKw && !isAllowedPlz) {
+      return { qualified: false, distanceKm: 999, isInTargetCity: false, rejectReason: `Location is outside Hannover 120km perimeter: ${locationStr}` };
+    }
+
+    return { qualified: true, distanceKm: kmMatch ? parseInt(kmMatch[1], 10) : 0, isInTargetCity: locLower.includes("hannover") || /\b30[0-9]{3}\b/.test(locLower) };
   }
 
   /**
