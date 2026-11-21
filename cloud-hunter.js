@@ -152,9 +152,17 @@ function parseArticlesFromSearchHtml(html) {
       if (anyEuro) priceText = anyEuro[1].trim();
     }
 
-    const locMatch = articleHtml.match(/<div\b[^>]*class="[^"]*aditem-main--top--left[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
-      articleHtml.match(/<span\b[^>]*class="[^"]*(?:location|city)[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
-    const locationText = locMatch ? cleanText(locMatch[1]) : "";
+    // Robust location extraction (Modern Tailwind SVG -> Legacy class -> span)
+    let locationText = "";
+    const locSvgMatch = articleHtml.match(/data-title="locationOutline"[\s\S]*?<\/svg>\s*<span>([\s\S]*?)<\/span>/i);
+    if (locSvgMatch) {
+      locationText = cleanText(locSvgMatch[1]);
+    }
+    if (!locationText) {
+      const locMatch = articleHtml.match(/<div\b[^>]*class="[^"]*aditem-main--top--left[^"]*"[^>]*>([\s\S]*?)<\/div>/i) ||
+        articleHtml.match(/<span\b[^>]*class="[^"]*(?:location|city)[^"]*"[^>]*>([\s\S]*?)<\/span>/i);
+      if (locMatch) locationText = cleanText(locMatch[1]);
+    }
 
     const descMatch = articleHtml.match(/<p\b[^>]*class="[^"]*aditem-main--middle--description[^"]*"[^>]*>([\s\S]*?)<\/p>/i) ||
       articleHtml.match(/<p\b[^>]*class="[^"]*description[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
@@ -199,9 +207,18 @@ async function fetchFullDetails(adUrl) {
       if (numOnly) price = parseInt(numOnly, 10);
     }
 
-    return { description, images, price };
+    // Extract location from detail page if snippet was missing it
+    let location = "";
+    const locDetailMatch = html.match(/id="viewad-locality"[^>]*>([\s\S]*?)<\//i) ||
+      html.match(/class="[^"]*viewad-locality[^"]*"[^>]*>([\s\S]*?)<\//i) ||
+      html.match(/data-title="locationOutline"[\s\S]*?<span[^>]*>([\s\S]*?)<\/span>/i);
+    if (locDetailMatch) {
+      location = cleanText(locDetailMatch[1]);
+    }
+
+    return { description, images, price, location };
   } catch (e) {
-    return { description: "", images: [], price: null };
+    return { description: "", images: [], price: null, location: "" };
   }
 }
 
@@ -631,13 +648,15 @@ class BotHunterInstance {
           continue;
         }
 
-        let details = { description: "", images: [], price: null };
+        let details = { description: "", images: [], price: null, location: "" };
         try {
           details = await fetchFullDetails(ad.adUrl);
         } catch (e) {}
 
-        if (details.description) {
-          parsed = RulesEngine.parseListing(ad.title, `${ad.snippetDesc} ${details.description}`, ad.priceText, ad.locationText, this.rules);
+        const effectiveLoc = ad.locationText || details.location || "";
+
+        if (details.description || details.location) {
+          parsed = RulesEngine.parseListing(ad.title, `${ad.snippetDesc} ${details.description}`, ad.priceText, effectiveLoc, this.rules);
         }
 
         // Backup price from detail page if search snippet didn't have it
@@ -665,7 +684,7 @@ class BotHunterInstance {
             adId: ad.adId,
             title: ad.title,
             url: ad.adUrl,
-            locationStr: ad.locationText
+            locationStr: effectiveLoc || ad.locationText
           };
 
           const dispatchRes = await this.dispatchDeal(itemData, evaluation, proposedMessage);
